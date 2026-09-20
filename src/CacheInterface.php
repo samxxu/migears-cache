@@ -22,7 +22,7 @@ interface CacheInterface extends SimpleCacheInterface
      *
      * @param string $key Cache key
      * @param callable(): mixed $factory Callable that produces the value
-     * @param int|null $ttl Expiration time in seconds, null means never expires
+     * @param null|int|\DateInterval $ttl Expiration: seconds, DateInterval, or null for never
      * @return mixed
      * @throws CacheException
      */

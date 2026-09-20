@@ -27,5 +27,8 @@
         "psr-4": {
             "MiGears\\Cache\\Tests\\": "tests/"
         }
+    },
+    "scripts": {
+        "test": "phpunit"
     }
 }

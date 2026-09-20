@@ -6,56 +6,45 @@ namespace MiGears\Cache;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
-use Redis;
 use MiGears\Cache\Exception\CacheException;
 
 /**
  * Redis cache implementation.
  *
- * Usage:
- *   new RedisCache($redis);          // pass an already connected Redis instance
- *   new RedisCache(['host' => '...']); // connection parameters
+ * This class never connects to Redis on its own. It only wraps an already
+ * connected Redis instance; establishing the connection belongs to the caller.
+ *
+ * Usage (web / miGears): inject the connection in MiRest, then obtain it via
+ * the service registry:
+ *   $rest->set(Redis::class, fn () => (new Redis())->connect(...));
+ *   // in a resource:
+ *   $cache = new RedisCache($this->service(Redis::class));
  *
  * Features:
  *   - Full PSR-16 compatibility
  *   - Atomic increment / decrement
- *   - Queue operations (push / pop)
- *   - Distributed lock (SET NX EX)
  *   - Key prefix support via withPrefix()
+ *
+ * Redis data structure operations (Hash/List/Set/ZSet, queue, distributed
+ * lock) live in the separate migears/data-structure package.
  */
 class RedisCache implements CacheInterface
 {
     public const VERSION = '2.0.0';
 
-    private readonly Redis $redis;
+    /** 无 phpredis 扩展时也可注入全局 mock（RedisMock），构造器接受任意对象（鸭子类型）。 */
+    public const PIPELINE = 2;
+
+    private readonly object $redis;
     private readonly LoggerInterface $logger;
     private string $prefix = '';
 
     public function __construct(
-        Redis|array $redis,
+        object $redis,
         ?LoggerInterface $logger = null,
     ) {
         $this->logger = $logger ?? new NullLogger();
-        $this->redis = $redis instanceof Redis ? $redis : $this->connect($redis);
-    }
-
-    /** @param array<string, mixed> $config */
-    private function connect(array $config): Redis
-    {
-        try {
-            $redis = new Redis();
-            $host = (string) ($config['host'] ?? '127.0.0.1');
-            $port = (int) ($config['port'] ?? 6379);
-            $timeout = (float) ($config['timeout'] ?? 0.0);
-            $persistent = (bool) ($config['persistent'] ?? false);
-            $persistent ? $redis->pconnect($host, $port, $timeout) : $redis->connect($host, $port, $timeout);
-            isset($config['auth']) && $redis->auth($config['auth']);
-            isset($config['dbindex']) && $redis->select((int) $config['dbindex']);
-            return $redis;
-        } catch (\Throwable $e) {
-            $this->logger->error('Redis connection failed', ['exception' => $e]);
-            throw new CacheException('Redis connection failed: ' . $e->getMessage(), $e->getCode(), $e);
-        }
+        $this->redis = $redis;
     }
 
     public function get(string $key, mixed $default = null): mixed
@@ -161,7 +150,7 @@ class RedisCache implements CacheInterface
             if ($ttlSeconds === null) {
                 return $this->redis->mset($serialized);
             }
-            $pipe = $this->redis->multi(Redis::PIPELINE);
+            $pipe = $this->redis->multi(self::PIPELINE);
             foreach ($serialized as $pkey => $value) {
                 $pipe->setex($pkey, $ttlSeconds, $value);
             }
@@ -232,46 +221,6 @@ class RedisCache implements CacheInterface
         }
     }
 
-    // --- Redis-specific advanced methods ---
-
-    /** Queue: enqueue from the right */
-    public function push(string $key, mixed ...$values): int
-    {
-        try {
-            $pkey = $this->prefix . $key;
-            $serialized = array_map(fn($v) => $this->serialize($v), $values);
-            return $this->redis->rPush($pkey, ...$serialized);
-        } catch (\Throwable $e) {
-            $this->logger->error('RedisCache push error', ['key' => $key, 'exception' => $e]);
-            throw new CacheException($e->getMessage(), $e->getCode(), $e);
-        }
-    }
-
-    /** Queue: dequeue from the left */
-    public function pop(string $key): mixed
-    {
-        try {
-            $pkey = $this->prefix . $key;
-            $value = $this->redis->lPop($pkey);
-            return $value === false ? null : $this->unserialize($value);
-        } catch (\Throwable $e) {
-            $this->logger->error('RedisCache pop error', ['key' => $key, 'exception' => $e]);
-            throw new CacheException($e->getMessage(), $e->getCode(), $e);
-        }
-    }
-
-    /** Distributed lock (SET NX EX) */
-    public function lock(string $key, int $ttl): bool
-    {
-        try {
-            $pkey = $this->prefix . $key;
-            return (bool) $this->redis->set($pkey, '1', ['nx', 'ex' => $ttl]);
-        } catch (\Throwable $e) {
-            $this->logger->error('RedisCache lock error', ['key' => $key, 'exception' => $e]);
-            throw new CacheException($e->getMessage(), $e->getCode(), $e);
-        }
-    }
-
     // --- Internal ---
 
     private function serialize(mixed $value): string
@@ -291,10 +240,7 @@ class RedisCache implements CacheInterface
             return null;
         }
         if ($ttl instanceof \DateInterval) {
-            return (int) $ttl->format('%a') * 86400
-                + (int) $ttl->format('%h') * 3600
-                + (int) $ttl->format('%i') * 60
-                + (int) $ttl->format('%s');
+            return (new \DateTimeImmutable())->add($ttl)->getTimestamp() - time();
         }
         return $ttl;
     }

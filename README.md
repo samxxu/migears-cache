@@ -11,7 +11,7 @@ A lightweight PHP cache abstraction layer that provides a clean, unified API wit
 - Follows PSR-4 autoloading standard, namespace `MiGears\Cache`
 - Minimalist API, ready to use after `new`
 - Built-in `ArrayCache` for unit testing and development environments
-- `RedisCache` with queue operations and distributed locks
+- `RedisCache` for PSR-16 caching; queue operations and distributed locks live in the separate `migears/data-structure` package
 - **`getOrSet()`** — compute and cache on miss in one call
 - **`withPrefix()`** — key namespacing for shared cache backends
 - Supports `int`, `DateInterval`, or `null` TTL formats
@@ -43,22 +43,7 @@ $cache->clear();
 
 ### RedisCache
 
-Using connection parameters:
-
-```php
-use MiGears\Cache\RedisCache;
-
-$cache = new RedisCache([
-    'host'       => '127.0.0.1',
-    'port'       => 6379,
-    'auth'       => 'password',    // optional
-    'dbindex'    => 0,             // optional
-    'persistent' => false,         // optional, whether to use persistent connection
-    'timeout'    => 0.0,           // optional, timeout duration
-]);
-```
-
-Passing an already connected Redis instance:
+Passing an already connected Redis instance. `RedisCache` never connects on its own; establishing the connection belongs to the caller.
 
 ```php
 use MiGears\Cache\RedisCache;
@@ -67,6 +52,14 @@ $redis = new Redis();
 $redis->connect('127.0.0.1', 6379);
 
 $cache = new RedisCache($redis);
+```
+
+When using miGears in a web environment, inject the connection in `MiRest` and obtain it via the service registry:
+
+```php
+$rest->set(Redis::class, fn () => (new Redis())->connect('127.0.0.1', 6379));
+// in a resource:
+$cache = new RedisCache($this->service(Redis::class));
 ```
 
 ## API
@@ -112,13 +105,16 @@ $appCache->clear();                // only clears keys starting with "myapp:"
 
 > ⚠️ **Redis `clear()` warning**: When no prefix is set, `clear()` calls `FLUSHDB` which deletes **all** keys in the current Redis database. Use `withPrefix()` on shared Redis instances to avoid accidental data loss.
 
-### RedisCache Advanced Methods
+### Redis Data Structures & Distributed Locks
 
-| Method | Description |
-|--------|-------------|
-| `push(string $key, mixed ...$values): int` | Push to the right side of a queue |
-| `pop(string $key): mixed` | Pop from the left side of a queue |
-| `lock(string $key, int $ttl): bool` | Distributed lock (SET NX EX) |
+Queue operations and distributed locks are not part of `RedisCache`; they live in the separate `migears/data-structure` package:
+
+- **Queue** — `RedisDataStructure::listPush()` / `listPop()`
+- **Distributed lock** — `RedisLock::lock()` / `unlock()`
+
+```bash
+composer require migears/data-structure
+```
 
 ## Logging
 
@@ -170,7 +166,7 @@ MIT
 - 遵循 PSR-4 自动加载规范，命名空间 `MiGears\Cache`
 - 极简 API，`new` 了就能用
 - 内置 `ArrayCache` 用于单元测试和开发环境
-- `RedisCache` 支持队列操作和分布式锁
+- `RedisCache` 提供 PSR-16 缓存；队列操作与分布式锁在独立的 `migears/data-structure` 包中
 - **`getOrSet()`** — 一次调用完成"读缓存-计算-写缓存"
 - **`withPrefix()`** — 共享缓存后端的键命名空间隔离
 - 支持 `int`、`DateInterval`、`null` 三种 TTL 格式
@@ -202,22 +198,7 @@ $cache->clear();
 
 ### RedisCache
 
-使用连接参数：
-
-```php
-use MiGears\Cache\RedisCache;
-
-$cache = new RedisCache([
-    'host'       => '127.0.0.1',
-    'port'       => 6379,
-    'auth'       => 'password',    // 可选
-    'dbindex'    => 0,             // 可选
-    'persistent' => false,         // 可选，是否长连接
-    'timeout'    => 0.0,           // 可选，超时时间
-]);
-```
-
-传入已连接的 Redis 实例：
+传入已连接的 Redis 实例。`RedisCache` 自身不会去连接，建立连接由调用方负责。
 
 ```php
 use MiGears\Cache\RedisCache;
@@ -226,6 +207,14 @@ $redis = new Redis();
 $redis->connect('127.0.0.1', 6379);
 
 $cache = new RedisCache($redis);
+```
+
+在 miGears 的 web 环境中，通过 `MiRest` 注入连接，再经服务注册中心取得：
+
+```php
+$rest->set(Redis::class, fn () => (new Redis())->connect('127.0.0.1', 6379));
+// 在资源类中：
+$cache = new RedisCache($this->service(Redis::class));
 ```
 
 ## API
@@ -271,13 +260,16 @@ $appCache->clear();                // 只清除以 "myapp:" 开头的键
 
 > ⚠️ **Redis `clear()` 注意**：未设置前缀时，`clear()` 会调用 `FLUSHDB` 删除当前 Redis 数据库中**所有**键。在共享 Redis 实例上请使用 `withPrefix()` 避免误删数据。
 
-### RedisCache 高级方法
+### Redis 数据结构与分布式锁
 
-| 方法 | 说明 |
-|------|------|
-| `push(string $key, mixed ...$values): int` | 队列右侧入队 |
-| `pop(string $key): mixed` | 队列左侧出队 |
-| `lock(string $key, int $ttl): bool` | 分布式锁（SET NX EX） |
+队列操作与分布式锁不属于 `RedisCache`，它们位于独立的 `migears/data-structure` 包中：
+
+- **队列** — `RedisDataStructure::listPush()` / `listPop()`
+- **分布式锁** — `RedisLock::lock()` / `unlock()`
+
+```bash
+composer require migears/data-structure
+```
 
 ## 日志
 

@@ -196,7 +196,7 @@ class ArrayCache implements CacheInterface
             return false;
         }
         $expire = $this->data[$pkey]['expire'];
-        if ($expire !== null && $expire < time()) {
+        if ($expire !== null && $expire <= time()) {
             unset($this->data[$pkey]);
             return false;
         }
@@ -209,10 +209,7 @@ class ArrayCache implements CacheInterface
             return null;
         }
         if ($ttl instanceof \DateInterval) {
-            return time() + (int) $ttl->format('%a') * 86400
-                + (int) $ttl->format('%h') * 3600
-                + (int) $ttl->format('%i') * 60
-                + (int) $ttl->format('%s');
+            return (new \DateTimeImmutable())->add($ttl)->getTimestamp();
         }
         return time() + $ttl;
     }

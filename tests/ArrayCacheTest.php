@@ -43,13 +43,9 @@ class ArrayCacheTest extends TestCase
         $this->assertSame('bar', $this->cache->get('foo'));
     }
 
-    public function testExpiredKeyReturnsDefault(): void
+    public function testZeroTtlExpiresImmediately(): void
     {
-        // Setting a past expiration time (not feasible via reflection or negative TTL since it uses time() + ttl)
-        // We use 0 second TTL to simulate expiration
         $this->cache->set('foo', 'bar', 0);
-        // Sleep 1 second to ensure expiration
-        sleep(1);
         $this->assertNull($this->cache->get('foo'));
     }
 
@@ -382,6 +378,18 @@ class ArrayCacheTest extends TestCase
         $interval = new \DateInterval('PT1H'); // 1 hour
         $this->assertTrue($this->cache->set('foo', 'bar', $interval));
         $this->assertSame('bar', $this->cache->get('foo'));
+    }
+
+    public function testSetWithMonthDateIntervalTtl(): void
+    {
+        // Regression: P1M (months) must not be silently treated as 0 seconds
+        $interval = new \DateInterval('P1M');
+        $this->assertTrue($this->cache->set('foo', 'bar', $interval));
+
+        $ref = new \ReflectionProperty(ArrayCache::class, 'data');
+        $expire = $ref->getValue($this->cache)['foo']['expire'];
+        $this->assertNotNull($expire);
+        $this->assertGreaterThan(time() + 25 * 86400, $expire);
     }
 
     public function testSetMultipleWithDateIntervalTtl(): void

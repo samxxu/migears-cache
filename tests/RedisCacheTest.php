@@ -6,7 +6,6 @@ namespace MiGears\Cache\Tests;
 
 use PHPUnit\Framework\TestCase;
 use MiGears\Cache\RedisCache;
-use MiGears\Cache\Exception\CacheException;
 
 /**
  * @requires extension redis
@@ -23,13 +22,12 @@ class RedisCacheTest extends TestCase
         $dbindex = (int) (getenv('REDIS_DB') ?: 15); // Use db 15 for testing
 
         try {
-            $this->cache = new RedisCache([
-                'host' => $host,
-                'port' => $port,
-                'dbindex' => $dbindex,
-            ]);
+            $redis = new \Redis();
+            $redis->connect($host, $port);
+            $redis->select($dbindex);
+            $this->cache = new RedisCache($redis);
             $this->cache->clear();
-        } catch (CacheException $e) {
+        } catch (\Throwable $e) {
             $this->markTestSkipped('Redis server not available: ' . $e->getMessage());
         }
     }
@@ -65,6 +63,21 @@ class RedisCacheTest extends TestCase
     public function testSetWithTtl(): void
     {
         $this->assertTrue($this->cache->set('foo', 'bar', 3600));
+        $this->assertSame('bar', $this->cache->get('foo'));
+    }
+
+    public function testSetWithDateIntervalTtl(): void
+    {
+        $interval = new \DateInterval('PT1H');
+        $this->assertTrue($this->cache->set('foo', 'bar', $interval));
+        $this->assertSame('bar', $this->cache->get('foo'));
+    }
+
+    public function testSetWithMonthDateIntervalTtl(): void
+    {
+        // Regression: P1M (months) must not be silently treated as 0 seconds
+        $interval = new \DateInterval('P1M');
+        $this->assertTrue($this->cache->set('foo', 'bar', $interval));
         $this->assertSame('bar', $this->cache->get('foo'));
     }
 
@@ -187,39 +200,6 @@ class RedisCacheTest extends TestCase
         $this->cache->set('counter', 10);
         $result = $this->cache->decr('counter', 3);
         $this->assertSame(7, $result);
-    }
-
-    // --- Queue operations ---
-
-    public function testPushAndPop(): void
-    {
-        $this->assertSame(1, $this->cache->push('queue', 'first'));
-        $this->assertSame(2, $this->cache->push('queue', 'second'));
-        $this->assertSame('first', $this->cache->pop('queue'));
-        $this->assertSame('second', $this->cache->pop('queue'));
-    }
-
-    public function testPopEmptyQueueReturnsNull(): void
-    {
-        $this->assertNull($this->cache->pop('empty_queue'));
-    }
-
-    public function testPushMultiple(): void
-    {
-        $count = $this->cache->push('queue', 'a', 'b', 'c');
-        $this->assertSame(3, $count);
-        $this->assertSame('a', $this->cache->pop('queue'));
-        $this->assertSame('b', $this->cache->pop('queue'));
-        $this->assertSame('c', $this->cache->pop('queue'));
-    }
-
-    // --- Distributed lock ---
-
-    public function testLock(): void
-    {
-        $this->assertTrue($this->cache->lock('lock_key', 10));
-        // Repeated acquisition should fail
-        $this->assertFalse($this->cache->lock('lock_key', 10));
     }
 
     // --- Constructor ---
