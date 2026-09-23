@@ -4,6 +4,10 @@
 
 A lightweight PHP cache abstraction layer that provides a clean, unified API with in-memory array cache and Redis implementations.
 
+> **Background**: miGears is the open-source successor of **TinyGears**, a
+> self-developed PHP framework. It was renamed and open-sourced recently because
+> the name *TinyGears* is already taken in the open-source community.
+
 ## Features
 
 - **PSR-16 compliant** — fully compatible with `Psr\SimpleCache\CacheInterface`
