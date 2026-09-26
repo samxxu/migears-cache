@@ -26,7 +26,7 @@ interface CacheInterface extends SimpleCacheInterface
      * @return mixed
      * @throws CacheException
      */
-    public function getOrSet(string $key, callable $factory, ?int $ttl = null): mixed;
+    public function getOrSet(string $key, callable $factory, null|int|\DateInterval $ttl = null): mixed;
 
     /**
      * Returns a new cache instance with a key prefix applied.

@@ -27,6 +27,8 @@ use MiGears\Cache\Exception\CacheException;
  *
  * Redis data structure operations (Hash/List/Set/ZSet, queue, distributed
  * lock) live in the separate migears/data-structure package.
+ *
+ * @phpstan-consistent-constructor
  */
 class RedisCache implements CacheInterface
 {
@@ -122,6 +124,10 @@ class RedisCache implements CacheInterface
         }
     }
 
+    /**
+     * @param iterable<string> $keys
+     * @return array<string, mixed>
+     */
     public function getMultiple(iterable $keys, mixed $default = null): array
     {
         try {
@@ -139,6 +145,7 @@ class RedisCache implements CacheInterface
         }
     }
 
+    /** @param iterable<string, mixed> $values */
     public function setMultiple(iterable $values, null|int|\DateInterval $ttl = null): bool
     {
         try {
@@ -188,7 +195,7 @@ class RedisCache implements CacheInterface
 
     public function withPrefix(string $prefix): static
     {
-        $copy = new self($this->redis, $this->logger);
+        $copy = new static($this->redis, $this->logger);
         $copy->prefix = $prefix;
         return $copy;
     }
@@ -223,15 +230,22 @@ class RedisCache implements CacheInterface
 
     // --- Internal ---
 
+    /** Marker prefix for serialized values, so plain strings are never unserialized. */
+    private const MARK = "\x00MG";
+
     private function serialize(mixed $value): string
     {
-        return is_string($value) ? $value : serialize($value);
+        return is_string($value) ? $value : self::MARK . serialize($value);
     }
 
     private function unserialize(string $value): mixed
     {
-        $unserialized = @unserialize($value);
-        return $unserialized !== false || $value === serialize(false) ? $unserialized : $value;
+        if (!str_starts_with($value, self::MARK)) {
+            return $value;
+        }
+        $payload = substr($value, strlen(self::MARK));
+        $unserialized = @unserialize($payload);
+        return $unserialized !== false || $payload === serialize(false) ? $unserialized : $value;
     }
 
     private function ttlToSeconds(null|int|\DateInterval $ttl): ?int

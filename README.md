@@ -61,7 +61,11 @@ $cache = new RedisCache($redis);
 When using miGears in a web environment, inject the connection in `MiRest` and obtain it via the service registry:
 
 ```php
-$rest->set(Redis::class, fn () => (new Redis())->connect('127.0.0.1', 6379));
+$rest->set(Redis::class, function () {
+    $redis = new Redis();
+    $redis->connect('127.0.0.1', 6379);
+    return $redis;
+});
 // in a resource:
 $cache = new RedisCache($this->service(Redis::class));
 ```
@@ -216,7 +220,11 @@ $cache = new RedisCache($redis);
 在 miGears 的 web 环境中，通过 `MiRest` 注入连接，再经服务注册中心取得：
 
 ```php
-$rest->set(Redis::class, fn () => (new Redis())->connect('127.0.0.1', 6379));
+$rest->set(Redis::class, function () {
+    $redis = new Redis();
+    $redis->connect('127.0.0.1', 6379);
+    return $redis;
+});
 // 在资源类中：
 $cache = new RedisCache($this->service(Redis::class));
 ```

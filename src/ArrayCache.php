@@ -12,6 +12,8 @@ use MiGears\Cache\Exception\CacheException;
  *
  * Useful for unit testing, development environments, and caching within
  * a single request lifecycle.
+ *
+ * @phpstan-consistent-constructor
  */
 class ArrayCache implements CacheInterface
 {
@@ -55,13 +57,10 @@ class ArrayCache implements CacheInterface
 
     public function delete(string $key): bool
     {
-        try {
-            unset($this->data[$this->prefix . $key]);
-            return true;
-        } catch (\Throwable $e) {
-            $this->logError('ArrayCache delete error', ['key' => $key, 'exception' => $e]);
-            throw new CacheException($e->getMessage(), $e->getCode(), $e);
-        }
+        // No try/catch here: $this->data is a typed array, so unset() cannot throw,
+        // which makes the sibling methods' catch branch unreachable for this body.
+        unset($this->data[$this->prefix . $key]);
+        return true;
     }
 
     public function has(string $key): bool
@@ -94,6 +93,10 @@ class ArrayCache implements CacheInterface
         }
     }
 
+    /**
+     * @param iterable<string> $keys
+     * @return array<string, mixed>
+     */
     public function getMultiple(iterable $keys, mixed $default = null): array
     {
         try {
@@ -108,6 +111,7 @@ class ArrayCache implements CacheInterface
         }
     }
 
+    /** @param iterable<string, mixed> $values */
     public function setMultiple(iterable $values, null|int|\DateInterval $ttl = null): bool
     {
         try {
@@ -146,7 +150,7 @@ class ArrayCache implements CacheInterface
 
     public function withPrefix(string $prefix): static
     {
-        $copy = new self($this->logger);
+        $copy = new static($this->logger);
         $copy->data = &$this->data;
         $copy->prefix = $prefix;
         return $copy;
