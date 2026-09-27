@@ -14,7 +14,7 @@ A lightweight PHP cache abstraction layer that provides a clean, unified API wit
 - PHP 8.1+, using modern syntax features (type declarations, constructor property promotion, readonly, match expressions, etc.)
 - Follows PSR-4 autoloading standard, namespace `MiGears\Cache`
 - Minimalist API, ready to use after `new`
-- Built-in `ArrayCache` for unit testing and development environments
+- Built-in `ArrayCache` for unit testing, development environments, and in-request caching
 - `RedisCache` for PSR-16 caching; queue operations and distributed locks live in the separate `migears/data-structure` package
 - **`getOrSet()`** — compute and cache on miss in one call
 - **`withPrefix()`** — key namespacing for shared cache backends
@@ -32,6 +32,13 @@ composer require migears/cache
 ## Quick Start
 
 ### ArrayCache (In-Memory Cache)
+
+An in-memory `CacheInterface` implementation for when no persistent store is needed:
+- **Unit tests** — no Redis/ext-redis required
+- **Development environments** — stand-in where Redis is unavailable
+- **In-request caching** — store computed values for the lifetime of one request
+
+Values live in a plain PHP array and are **lost when the request ends**; use `RedisCache` when data must be shared across requests or processes.
 
 ```php
 use MiGears\Cache\ArrayCache;
@@ -183,7 +190,7 @@ MIT
 - PHP 8.1+，使用现代语法特性（类型声明、构造器属性提升、readonly、match 表达式等）
 - 遵循 PSR-4 自动加载规范，命名空间 `MiGears\Cache`
 - 极简 API，`new` 了就能用
-- 内置 `ArrayCache` 用于单元测试和开发环境
+- 内置 `ArrayCache` 用于单元测试、开发环境与单请求内缓存
 - `RedisCache` 提供 PSR-16 缓存；队列操作与分布式锁在独立的 `migears/data-structure` 包中
 - **`getOrSet()`** — 一次调用完成"读缓存-计算-写缓存"
 - **`withPrefix()`** — 共享缓存后端的键命名空间隔离
@@ -201,6 +208,13 @@ composer require migears/cache
 ## 快速开始
 
 ### ArrayCache（内存缓存）
+
+`CacheInterface` 的内存实现，适用于不需要持久化存储的场景：
+- **单元测试** — 无需 Redis / ext-redis 即可运行
+- **开发环境** — 在无 Redis 的环境下作为临时替身
+- **单请求内缓存** — 在一次请求生命周期内保存已计算的结果
+
+数据存放在普通 PHP 数组中，**请求结束即丢失**；需要跨请求或跨进程共享数据时，请使用 `RedisCache`。
 
 ```php
 use MiGears\Cache\ArrayCache;
