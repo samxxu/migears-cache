@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
+
+    name: PHP ${{ matrix.php }}
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          # RedisCacheTest is @requires extension redis.
+          extensions: redis
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Static analysis
+        run: vendor/bin/phpstan analyse --no-progress
+
+      # phpunit.xml.dist excludes the integration group, so this is the half
+      # that runs without a server.
+      - name: Unit tests
+        run: vendor/bin/phpunit
+
+      # RedisCacheTest is @group integration, and it skips itself when it cannot
+      # reach a server — a skip still exits 0, so without the flag the Redis half
+      # of the module would be reported as passing while running nothing.
+      - name: Integration tests (Redis via service container)
+        env:
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: '6379'
+        run: vendor/bin/phpunit --group integration --fail-on-skipped
