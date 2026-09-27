@@ -248,6 +248,7 @@ class RedisCache implements CacheInterface
      * increment; doing it in PHP would be a read-modify-write.
      */
     private const COUNTER_SCRIPT = <<<'LUA'
+    local marker = '\0MG'
     local value = redis.call('GET', KEYS[1])
     local step = tonumber(ARGV[1])
     local marked = true
@@ -255,17 +256,20 @@ class RedisCache implements CacheInterface
 
     if value == false then
       current = 0
-    elseif string.sub(value, 1, 3) == '\0MG' then
-      local digits = string.match(value, '^\0MGi:(%-?%d+);$')
-      if digits == nil then
+    elseif string.sub(value, 1, #marker) == marker then
+      local payload = string.sub(value, #marker + 1)
+      if string.sub(payload, 1, 2) ~= 'i:' or string.sub(payload, -1) ~= ';' then
         return redis.error_reply('value is not an integer or out of range')
       end
-      current = tonumber(digits)
+      current = tonumber(string.sub(payload, 3, -2))
+      if current == nil then
+        return redis.error_reply('value is not an integer or out of range')
+      end
     else
-      if string.match(value, '^%-?%d+$') == nil then
+      current = tonumber(value)
+      if current == nil or tostring(current) ~= value then
         return redis.error_reply('value is not an integer or out of range')
       end
-      current = tonumber(value)
       marked = false
     end
 
@@ -273,7 +277,7 @@ class RedisCache implements CacheInterface
     local result = current + step
 
     if marked then
-      redis.call('SET', KEYS[1], '\0MGi:' .. result .. ';')
+      redis.call('SET', KEYS[1], marker .. 'i:' .. result .. ';')
     else
       redis.call('SET', KEYS[1], tostring(result))
     end
@@ -294,7 +298,16 @@ class RedisCache implements CacheInterface
                 1
             );
             if (!is_int($result)) {
-                throw new \RuntimeException("the value at \"{$key}\" is not an integer");
+                // Redis answers an error inside a script with a false, and keeps
+                // the reason aside; say it here, or the caller is told only that
+                // something went wrong.
+                $reason = method_exists($this->redis, 'getLastError')
+                    ? (string) $this->redis->getLastError()
+                    : '';
+                throw new \RuntimeException(
+                    "the value at \"{$key}\" is not an integer"
+                    . ($reason === '' ? '' : ": {$reason}")
+                );
             }
             return $result;
         } catch (\Throwable $e) {
