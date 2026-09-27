@@ -70,6 +70,16 @@ $rest->set(Redis::class, function () {
 $cache = new RedisCache($this->service(Redis::class));
 ```
 
+Values are stored so that a string is never read back as something else. A string is written verbatim, unless it begins with an internal marker — then it is stored as a payload too, because the reader has no other way to tell the two apart. Only marked values are ever unserialized, so a string shaped like `O:8:"stdClass":0:{}` stays a string.
+
+`$allowedClasses` bounds what a marked payload may instantiate on read. The default (`true`) keeps PSR-16 object support; pass `false`, or the classes you actually cache, if entries can be written by anyone outside your application:
+
+```php
+$cache = new RedisCache($redis, allowedClasses: false);
+```
+
+With `false`, a payload carrying an object comes back as `__PHP_Incomplete_Class` instead of the object; arrays and scalars are unaffected.
+
 ## API
 
 ### Basic Methods
@@ -228,6 +238,16 @@ $rest->set(Redis::class, function () {
 // 在资源类中：
 $cache = new RedisCache($this->service(Redis::class));
 ```
+
+存储方式是「无歧义」的：字符串原样写入，除非它以内部标记开头——那时它也会被当作载荷存储，因为读取方没有别的办法区分两者。只有带标记的值会被反序列化，因此形如 `O:8:"stdClass":0:{}` 的字符串读出来仍然是字符串。
+
+`$allowedClasses` 限定读回时载荷可以实例化哪些类。默认值（`true`）保留 PSR-16 的对象支持；若缓存条目可能由应用之外的人写入，可传 `false`，或只列出你确实会缓存的类：
+
+```php
+$cache = new RedisCache($redis, allowedClasses: false);
+```
+
+传 `false` 时，带对象的载荷会以 `__PHP_Incomplete_Class` 返回而非该对象；数组与标量不受影响。
 
 ## API
 

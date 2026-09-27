@@ -15,10 +15,20 @@ use MiGears\Cache\Exception\CacheException;
  * connected Redis instance; establishing the connection belongs to the caller.
  *
  * Usage (web / miGears): inject the connection in MiRest, then obtain it via
- * the service registry:
- *   $rest->set(Redis::class, fn () => (new Redis())->connect(...));
+ * the service registry. The factory must return the connected instance, and
+ * connect() returns a bool, so it cannot be the return value itself:
+ *   $rest->set(Redis::class, function () {
+ *       $redis = new Redis();
+ *       $redis->connect('127.0.0.1', 6379);
+ *       return $redis;
+ *   });
  *   // in a resource:
  *   $cache = new RedisCache($this->service(Redis::class));
+ *
+ * Storage is unambiguous by construction: a string is written verbatim unless
+ * it begins with the marker, and only marked values are unserialized, so a
+ * stored string can never come back as an object. Pass $allowedClasses to
+ * bound what a marked payload is allowed to instantiate.
  *
  * Features:
  *   - Full PSR-16 compatibility
@@ -39,14 +49,26 @@ class RedisCache implements CacheInterface
 
     private readonly object $redis;
     private readonly LoggerInterface $logger;
+    /** @var array<class-string>|bool */
+    private readonly array|bool $allowedClasses;
     private string $prefix = '';
 
+    /**
+     * @param object $redis Already connected Redis instance; the caller owns the connection
+     * @param LoggerInterface|null $logger
+     * @param array<class-string>|bool $allowedClasses Classes unserialize() may instantiate.
+     *        The default (true) keeps PSR-16 object support. Pass false, or the classes you
+     *        actually cache, to stop a payload written by someone else from instantiating
+     *        anything at all.
+     */
     public function __construct(
         object $redis,
         ?LoggerInterface $logger = null,
+        array|bool $allowedClasses = true,
     ) {
         $this->logger = $logger ?? new NullLogger();
         $this->redis = $redis;
+        $this->allowedClasses = $allowedClasses;
     }
 
     public function get(string $key, mixed $default = null): mixed
@@ -195,7 +217,7 @@ class RedisCache implements CacheInterface
 
     public function withPrefix(string $prefix): static
     {
-        $copy = new static($this->redis, $this->logger);
+        $copy = new static($this->redis, $this->logger, $this->allowedClasses);
         $copy->prefix = $prefix;
         return $copy;
     }
@@ -233,18 +255,31 @@ class RedisCache implements CacheInterface
     /** Marker prefix for serialized values, so plain strings are never unserialized. */
     private const MARK = "\x00MG";
 
+    /**
+     * A string is stored raw so it stays readable, unless it begins with the
+     * marker: then it is stored as a payload too and read back verbatim,
+     * because the reader has no other way to tell the two apart. Without that
+     * escape a string such as "\x00MGO:8:\"stdClass\":0:{}" would come back as
+     * an object, which is the object-injection primitive.
+     */
     private function serialize(mixed $value): string
     {
-        return is_string($value) ? $value : self::MARK . serialize($value);
+        return is_string($value) && !str_starts_with($value, self::MARK)
+            ? $value
+            : self::MARK . serialize($value);
     }
 
+    /**
+     * Only a value carrying the marker is a payload; anything else is the
+     * string that was stored.
+     */
     private function unserialize(string $value): mixed
     {
         if (!str_starts_with($value, self::MARK)) {
             return $value;
         }
         $payload = substr($value, strlen(self::MARK));
-        $unserialized = @unserialize($payload);
+        $unserialized = @unserialize($payload, ['allowed_classes' => $this->allowedClasses]);
         return $unserialized !== false || $payload === serialize(false) ? $unserialized : $value;
     }
 

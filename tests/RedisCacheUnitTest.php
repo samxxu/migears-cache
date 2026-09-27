@@ -148,4 +148,70 @@ class RedisCacheUnitTest extends TestCase
         $this->cache->set('edge', $payload);
         $this->assertSame($payload, $this->cache->get('edge'));
     }
+
+    public function testMarkerPrefixedStringCarryingAnObjectPayloadStaysString(): void
+    {
+        // The primitive the marker guard alone left open: the bytes after the
+        // marker are a payload that unserialize() accepts.
+        $payload = "\x00MG" . 'O:8:"stdClass":0:{}';
+        $this->cache->set('marked-object', $payload);
+
+        $got = $this->cache->get('marked-object');
+        $this->assertSame($payload, $got);
+        $this->assertIsString($got);
+    }
+
+    public function testMarkerPrefixedSerializedStringIsNotUnwrapped(): void
+    {
+        $payload = "\x00MG" . serialize('hello');
+        $this->cache->set('marked-string', $payload);
+
+        $this->assertSame($payload, $this->cache->get('marked-string'));
+    }
+
+    public function testMarkerPrefixedStringSurvivesGetMultiple(): void
+    {
+        $payload = "\x00MG" . 'a:1:{i:0;s:3:"foo";}';
+        $this->cache->set('marked', $payload);
+
+        $this->assertSame($payload, $this->cache->getMultiple(['marked'])['marked']);
+    }
+
+    public function testBinaryValueStartingWithMarkerRoundTrips(): void
+    {
+        $payload = "\x00MG" . "\x00\x01\x02\xff";
+        $this->cache->set('binary', $payload);
+
+        $this->assertSame($payload, $this->cache->get('binary'));
+    }
+
+    // --- allowed classes ---
+
+    public function testAllowedClassesFalseBlocksInstantiation(): void
+    {
+        // A payload written straight into the store by someone else.
+        $this->fake->data['poisoned'] = "\x00MG" . serialize(new \stdClass());
+
+        $cache = new RedisCache($this->fake, allowedClasses: false);
+
+        // unserialize() returns an __PHP_Incomplete_Class rather than the object.
+        $this->assertNotInstanceOf(\stdClass::class, $cache->get('poisoned'));
+    }
+
+    public function testAllowedClassesFalseStillRoundTripsArrays(): void
+    {
+        $cache = new RedisCache($this->fake, allowedClasses: false);
+        $cache->set('array', ['a' => 1, 'nested' => ['b' => 2]]);
+
+        $this->assertSame(['a' => 1, 'nested' => ['b' => 2]], $cache->get('array'));
+    }
+
+    public function testWithPrefixKeepsAllowedClasses(): void
+    {
+        $cache = new RedisCache($this->fake, allowedClasses: false);
+        $prefixed = $cache->withPrefix('p:');
+        $this->fake->data['p:poisoned'] = "\x00MG" . serialize(new \stdClass());
+
+        $this->assertNotInstanceOf(\stdClass::class, $prefixed->get('poisoned'));
+    }
 }
