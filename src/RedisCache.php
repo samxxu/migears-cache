@@ -23,7 +23,7 @@ use MiGears\Cache\Exception\CacheException;
  *       return $redis;
  *   });
  *   // in a resource:
- *   $cache = new RedisCache($this->service(Redis::class));
+ *   $cache = new RedisCache($this->resolve(Redis::class));
  *
  * Storage is unambiguous by construction: a string is written verbatim unless
  * it begins with the marker, and only marked values are unserialized, so a

@@ -74,7 +74,7 @@ $rest->set(Redis::class, function () {
     return $redis;
 });
 // in a resource:
-$cache = new RedisCache($this->service(Redis::class));
+$cache = new RedisCache($this->resolve(Redis::class));
 ```
 
 Values are stored so that a string is never read back as something else. A string is written verbatim, unless it begins with an internal marker — then it is stored as a payload too, because the reader has no other way to tell the two apart. Only marked values are ever unserialized, so a string shaped like `O:8:"stdClass":0:{}` stays a string.
@@ -252,7 +252,7 @@ $rest->set(Redis::class, function () {
     return $redis;
 });
 // 在资源类中：
-$cache = new RedisCache($this->service(Redis::class));
+$cache = new RedisCache($this->resolve(Redis::class));
 ```
 
 存储方式是「无歧义」的：字符串原样写入，除非它以内部标记开头——那时它也会被当作载荷存储，因为读取方没有别的办法区分两者。只有带标记的值会被反序列化，因此形如 `O:8:"stdClass":0:{}` 的字符串读出来仍然是字符串。
