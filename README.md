@@ -132,6 +132,10 @@ $appCache->clear();                // only clears keys starting with "myapp:"
 
 > ⚠️ **Redis `clear()` warning**: When no prefix is set, `clear()` calls `FLUSHDB` which deletes **all** keys in the current Redis database. Use `withPrefix()` on shared Redis instances to avoid accidental data loss.
 
+### Cache Key Contract
+
+PSR-16 reserves certain characters (`{}()/\@:`) and requires implementations to reject keys containing them with `InvalidArgumentException`. miGears does **not** validate cache keys — this is a deliberate choice to keep the framework minimal: phpredis treats most of those characters as ordinary strings, and `ArrayCache` (PHP array keys) accepts them all. Callers are responsible for using sane key strings; avoid `{}()/\@:` unless you know the backend tolerates them.
+
 ### Redis Data Structures & Distributed Locks
 
 Queue operations and distributed locks are not part of `RedisCache`; they live in the separate `migears/data-structure` package:
@@ -309,6 +313,10 @@ $appCache->clear();                // 只清除以 "myapp:" 开头的键
 ```
 
 > ⚠️ **Redis `clear()` 注意**：未设置前缀时，`clear()` 会调用 `FLUSHDB` 删除当前 Redis 数据库中**所有**键。在共享 Redis 实例上请使用 `withPrefix()` 避免误删数据。
+
+### 缓存键约定
+
+PSR-16 保留了一些字符（`{}()/\@:`）并要求实现对其抛 `InvalidArgumentException`。miGears **不校验缓存键**——这是为了保持框架极简而做出的有意取舍：phpredis 将大多数这类字符当作普通字符串处理，`ArrayCache`（PHP 数组键）则全部接受。使用者应自行保证键名规范；除非确认后端能容忍，否则请避免使用 `{}()/\@:`。
 
 ### Redis 数据结构与分布式锁
 

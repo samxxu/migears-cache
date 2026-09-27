@@ -87,8 +87,12 @@ class RedisCache implements CacheInterface
     {
         try {
             $pkey = $this->prefix . $key;
-            $serialized = $this->serialize($value);
             $ttlSeconds = $this->ttlToSeconds($ttl);
+            if ($ttlSeconds !== null && $ttlSeconds <= 0) {
+                // PSR-16: a TTL <= 0 must expire the entry immediately, i.e. delete it.
+                return $this->redis->del($pkey) !== false;
+            }
+            $serialized = $this->serialize($value);
             return $ttlSeconds === null
                 ? (bool) $this->redis->set($pkey, $serialized)
                 : (bool) $this->redis->setex($pkey, $ttlSeconds, $serialized);
@@ -102,7 +106,9 @@ class RedisCache implements CacheInterface
     {
         try {
             $pkey = $this->prefix . $key;
-            return $this->redis->del($pkey) >= 0;
+            // del() returns the number of removed keys (0 when absent, still a
+            // successful no-op); only a literal false signals an actual failure.
+            return $this->redis->del($pkey) !== false;
         } catch (\Throwable $e) {
             $this->logger->error('RedisCache delete error', ['key' => $key, 'exception' => $e]);
             throw new CacheException($e->getMessage(), $e->getCode(), $e);
@@ -154,10 +160,11 @@ class RedisCache implements CacheInterface
     {
         try {
             $keyArray = is_array($keys) ? $keys : iterator_to_array($keys);
-            $prefixedKeys = array_map(fn($k) => $this->prefix . $k, $keyArray);
+            $keyList = array_values($keyArray); // mget() answers by position, from index 0
+            $prefixedKeys = array_map(fn($k) => $this->prefix . $k, $keyList);
             $values = $this->redis->mget($prefixedKeys);
             $result = [];
-            foreach ($keyArray as $i => $key) {
+            foreach ($keyList as $i => $key) {
                 $result[$key] = $values[$i] === false ? $default : $this->unserialize($values[$i]);
             }
             return $result;

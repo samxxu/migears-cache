@@ -11,6 +11,7 @@ use MiGears\Cache\RedisCache;
 class FakeRedis
 {
     public array $data = [];
+    public bool $delReturnsFalse = false;
 
     public function get(string $key): mixed
     {
@@ -34,8 +35,11 @@ class FakeRedis
         return isset($this->data[$key]) ? 1 : 0;
     }
 
-    public function del(...$keys): int
+    public function del(...$keys): int|false
     {
+        if ($this->delReturnsFalse) {
+            return false;
+        }
         $count = 0;
         foreach ($keys as $key) {
             if (isset($this->data[$key])) {
@@ -213,5 +217,56 @@ class RedisCacheUnitTest extends TestCase
         $this->fake->data['p:poisoned'] = "\x00MG" . serialize(new \stdClass());
 
         $this->assertNotInstanceOf(\stdClass::class, $prefixed->get('poisoned'));
+    }
+
+    // --- P2 regressions ---
+
+    public function testGetMultipleAlignsByPositionForNonListArrays(): void
+    {
+        $this->cache->set('a', 'v-a');
+        $this->cache->set('b', 'v-b');
+
+        // Non-list keys: [1=>'a', 2=>'b'] must map by key, not by array index.
+        $result = $this->cache->getMultiple([1 => 'a', 2 => 'b']);
+        $this->assertSame(['a' => 'v-a', 'b' => 'v-b'], $result);
+    }
+
+    public function testGetMultipleHandlesAssociativeKeys(): void
+    {
+        $this->cache->set('x', 1);
+        $this->cache->set('y', 2);
+
+        $result = $this->cache->getMultiple(['foo' => 'x', 'bar' => 'y']);
+        $this->assertSame(['x' => 1, 'y' => 2], $result);
+    }
+
+    public function testSetWithTTLZeroDeletesEntry(): void
+    {
+        $this->cache->set('k', 'boom');
+        $this->cache->set('k', 'x', 0);
+
+        $this->assertFalse($this->cache->has('k'));
+        $this->assertNull($this->cache->get('k'));
+    }
+
+    public function testSetWithNegativeTTLDeletesEntry(): void
+    {
+        $this->cache->set('k', 'boom');
+        $this->cache->set('k', 'x', -5);
+
+        $this->assertFalse($this->cache->has('k'));
+    }
+
+    public function testDeletePropagatesRedisFailure(): void
+    {
+        $this->fake->delReturnsFalse = true;
+
+        $this->assertFalse($this->cache->delete('missing'));
+    }
+
+    public function testDeleteWithZeroRemovedIsSuccess(): void
+    {
+        // 0 removed keys (absent) is still a successful no-op, not a failure.
+        $this->assertTrue($this->cache->delete('missing'));
     }
 }
