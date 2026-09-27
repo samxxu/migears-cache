@@ -224,33 +224,84 @@ class RedisCache implements CacheInterface
 
     public function incr(string $key, int $step = 1): int
     {
-        try {
-            $pkey = $this->prefix . $key;
-            return match ($step) {
-                1 => $this->redis->incr($pkey),
-                default => $this->redis->incrBy($pkey, $step),
-            };
-        } catch (\Throwable $e) {
-            $this->logger->error('RedisCache incr error', ['key' => $key, 'exception' => $e]);
-            throw new CacheException($e->getMessage(), $e->getCode(), $e);
-        }
+        return $this->adjustCounter($key, $step);
     }
 
     public function decr(string $key, int $step = 1): int
     {
-        try {
-            $pkey = $this->prefix . $key;
-            return match ($step) {
-                1 => $this->redis->decr($pkey),
-                default => $this->redis->decrBy($pkey, $step),
-            };
-        } catch (\Throwable $e) {
-            $this->logger->error('RedisCache decr error', ['key' => $key, 'exception' => $e]);
-            throw new CacheException($e->getMessage(), $e->getCode(), $e);
-        }
+        return $this->adjustCounter($key, -$step);
     }
 
     // --- Internal ---
+
+    /**
+     * Move a counter by ARGV[1] inside Redis, atomically.
+     *
+     * INCR and DECR only accept a value Redis itself reads as an integer, and an
+     * int stored by set() carries the marker in front of its serialized payload
+     * (see serialize(), which cannot store it bare without a stored string
+     * starting to read back as an int). So the script accepts both shapes,
+     * writes the result back in the shape it found — a counter this cache wrote
+     * stays an int, a bare integer another client wrote stays a string — and
+     * re-applies the TTL that INCR itself would have left alone. Reading and
+     * writing inside Redis is what keeps two processes from losing an
+     * increment; doing it in PHP would be a read-modify-write.
+     */
+    private const COUNTER_SCRIPT = <<<'LUA'
+    local value = redis.call('GET', KEYS[1])
+    local step = tonumber(ARGV[1])
+    local marked = true
+    local current = 0
+
+    if value == false then
+      current = 0
+    elseif string.sub(value, 1, 3) == '\0MG' then
+      local digits = string.match(value, '^\0MGi:(%-?%d+);$')
+      if digits == nil then
+        return redis.error_reply('value is not an integer or out of range')
+      end
+      current = tonumber(digits)
+    else
+      if string.match(value, '^%-?%d+$') == nil then
+        return redis.error_reply('value is not an integer or out of range')
+      end
+      current = tonumber(value)
+      marked = false
+    end
+
+    local ttl = redis.call('PTTL', KEYS[1])
+    local result = current + step
+
+    if marked then
+      redis.call('SET', KEYS[1], '\0MGi:' .. result .. ';')
+    else
+      redis.call('SET', KEYS[1], tostring(result))
+    end
+
+    if ttl > 0 then
+      redis.call('PEXPIRE', KEYS[1], ttl)
+    end
+
+    return result
+    LUA;
+
+    private function adjustCounter(string $key, int $step): int
+    {
+        try {
+            $result = $this->redis->eval(
+                self::COUNTER_SCRIPT,
+                [$this->prefix . $key, (string) $step],
+                1
+            );
+            if (!is_int($result)) {
+                throw new \RuntimeException("the value at \"{$key}\" is not an integer");
+            }
+            return $result;
+        } catch (\Throwable $e) {
+            $this->logger->error('RedisCache counter error', ['key' => $key, 'exception' => $e]);
+            throw new CacheException($e->getMessage(), $e->getCode(), $e);
+        }
+    }
 
     /** Marker prefix for serialized values, so plain strings are never unserialized. */
     private const MARK = "\x00MG";

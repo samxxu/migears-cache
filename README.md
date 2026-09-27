@@ -106,6 +106,8 @@ With `false`, a payload carrying an object comes back as `__PHP_Incomplete_Class
 | `getOrSet(string $key, callable $factory, $ttl = null): mixed` | Get or compute & store |
 | `withPrefix(string $prefix): static` | Return namespaced instance |
 
+A counter keeps the shape it was found in: one written by `set()` stays an int, so `get()` reads it back as an int, while a bare integer another client left behind stays a string. Both are adjusted inside one Redis script, so the read and the write cannot interleave, and the TTL survives.
+
 ### getOrSet — Lazy cache pattern
 
 Compute and store a value only on cache miss:
@@ -281,6 +283,8 @@ $cache = new RedisCache($redis, allowedClasses: false);
 | `decr(string $key, int $step = 1): int` | 原子自减 |
 | `getOrSet(string $key, callable $factory, $ttl = null): mixed` | 获取或计算并存储 |
 | `withPrefix(string $prefix): static` | 返回带前缀的实例 |
+
+计数器的存储形状保持不变：由 `set()` 写入的计数读回来是 int，而其他客户端留下的裸整数仍读作字符串。两者都在同一段 Redis 脚本中调整，因此读写不会被插入，TTL 也会保留。
 
 ### getOrSet — 懒缓存模式
 
