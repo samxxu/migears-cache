@@ -7,6 +7,7 @@ namespace MiGears\Cache;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use MiGears\Cache\Exception\CacheException;
+use MiGears\Cache\Exception\InvalidCacheKeyException;
 
 /**
  * Redis cache implementation.
@@ -37,8 +38,6 @@ use MiGears\Cache\Exception\CacheException;
  *
  * Redis data structure operations (Hash/List/Set/ZSet, queue, distributed
  * lock) live in the separate migears/data-structure package.
- *
- * @phpstan-consistent-constructor
  */
 class RedisCache implements CacheInterface
 {
@@ -73,6 +72,7 @@ class RedisCache implements CacheInterface
 
     public function get(string $key, mixed $default = null): mixed
     {
+        $this->assertValidKey($key);
         try {
             $pkey = $this->prefix . $key;
             $value = $this->redis->get($pkey);
@@ -85,6 +85,7 @@ class RedisCache implements CacheInterface
 
     public function set(string $key, mixed $value, null|int|\DateInterval $ttl = null): bool
     {
+        $this->assertValidKey($key);
         try {
             $pkey = $this->prefix . $key;
             $ttlSeconds = $this->ttlToSeconds($ttl);
@@ -104,6 +105,7 @@ class RedisCache implements CacheInterface
 
     public function delete(string $key): bool
     {
+        $this->assertValidKey($key);
         try {
             $pkey = $this->prefix . $key;
             // del() returns the number of removed keys (0 when absent, still a
@@ -117,6 +119,7 @@ class RedisCache implements CacheInterface
 
     public function has(string $key): bool
     {
+        $this->assertValidKey($key);
         try {
             $pkey = $this->prefix . $key;
             return (bool) $this->redis->exists($pkey);
@@ -158,11 +161,19 @@ class RedisCache implements CacheInterface
      */
     public function getMultiple(iterable $keys, mixed $default = null): array
     {
+        $keyList = is_array($keys) ? array_values($keys) : iterator_to_array($keys, false);
+        foreach ($keyList as $key) {
+            $this->assertValidKey($key);
+        }
         try {
-            $keyArray = is_array($keys) ? $keys : iterator_to_array($keys);
-            $keyList = array_values($keyArray); // mget() answers by position, from index 0
             $prefixedKeys = array_map(fn($k) => $this->prefix . $k, $keyList);
             $values = $this->redis->mget($prefixedKeys);
+            // phpredis answers false when the command itself fails. Indexing it
+            // would emit a warning and then surface as a TypeError, so say what
+            // actually happened instead.
+            if (!is_array($values) || count($values) !== count($prefixedKeys)) {
+                throw new \RuntimeException('mget() did not return one value per key');
+            }
             $result = [];
             foreach ($keyList as $i => $key) {
                 $result[$key] = $values[$i] === false ? $default : $this->unserialize($values[$i]);
@@ -178,10 +189,18 @@ class RedisCache implements CacheInterface
     public function setMultiple(iterable $values, null|int|\DateInterval $ttl = null): bool
     {
         try {
-            $ttlSeconds = $this->ttlToSeconds($ttl);
             $serialized = [];
             foreach ($values as $key => $value) {
+                $this->assertValidKey($key);
                 $serialized[$this->prefix . $key] = $this->serialize($value);
+            }
+            // An empty batch is a successful no-op; mset([]) is an error to Redis.
+            if ($serialized === []) {
+                return true;
+            }
+            $ttlSeconds = $this->ttlToSeconds($ttl);
+            if ($ttlSeconds !== null && $ttlSeconds <= 0) {
+                return $this->redis->del(...array_keys($serialized)) !== false;
             }
             if ($ttlSeconds === null) {
                 return $this->redis->mset($serialized);
@@ -190,8 +209,12 @@ class RedisCache implements CacheInterface
             foreach ($serialized as $pkey => $value) {
                 $pipe->setex($pkey, $ttlSeconds, $value);
             }
-            $pipe->exec();
-            return true;
+            // exec() answers one entry per queued command; a false in there is a
+            // command that failed, so a discarded result would hide it.
+            $results = $pipe->exec();
+            return is_array($results) && !in_array(false, $results, true);
+        } catch (InvalidCacheKeyException $e) {
+            throw $e;
         } catch (\Throwable $e) {
             $this->logger->error('RedisCache setMultiple error', ['exception' => $e]);
             throw new CacheException($e->getMessage(), $e->getCode(), $e);
@@ -202,9 +225,17 @@ class RedisCache implements CacheInterface
     {
         try {
             $keyArray = is_array($keys) ? $keys : iterator_to_array($keys);
-            $prefixedKeys = array_map(fn($k) => $this->prefix . $k, $keyArray);
+            foreach ($keyArray as $key) {
+                $this->assertValidKey($key);
+            }
+            $prefixedKeys = array_map(fn ($k) => $this->prefix . $k, $keyArray);
+            if ($prefixedKeys === []) {
+                return true;
+            }
             $this->redis->del(...$prefixedKeys);
             return true;
+        } catch (InvalidCacheKeyException $e) {
+            throw $e;
         } catch (\Throwable $e) {
             $this->logger->error('RedisCache deleteMultiple error', ['exception' => $e]);
             throw new CacheException($e->getMessage(), $e->getCode(), $e);
@@ -224,22 +255,41 @@ class RedisCache implements CacheInterface
 
     public function withPrefix(string $prefix): static
     {
-        $copy = new static($this->redis, $this->logger, $this->allowedClasses);
+        // clone, not `new static(...)`: a subclass with an incompatible
+        // constructor must not make prefixing fail, and cloning carries the
+        // connection, logger and allowedClasses over without re-reading them.
+        $copy = clone $this;
         $copy->prefix = $prefix;
         return $copy;
     }
 
     public function incr(string $key, int $step = 1): int
     {
+        $this->assertValidKey($key);
         return $this->adjustCounter($key, $step);
     }
 
     public function decr(string $key, int $step = 1): int
     {
+        $this->assertValidKey($key);
         return $this->adjustCounter($key, -$step);
     }
 
     // --- Internal ---
+
+    /**
+     * PSR-16 reserves these characters and requires an InvalidArgumentException.
+     *
+     * @param mixed $key
+     */
+    private function assertValidKey(mixed $key): void
+    {
+        if (!is_string($key) || strpbrk($key, '{}()/\\@:') !== false) {
+            throw new InvalidCacheKeyException(
+                'Invalid cache key: expected a string without the reserved characters {}()/\\@:'
+            );
+        }
+    }
 
     /**
      * Move a counter by ARGV[1] inside Redis, atomically.

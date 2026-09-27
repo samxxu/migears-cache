@@ -12,6 +12,8 @@ class FakeRedis
 {
     public array $data = [];
     public bool $delReturnsFalse = false;
+    public bool $mgetReturnsFalse = false;
+    public bool $pipelineFails = false;
 
     public function get(string $key): mixed
     {
@@ -51,14 +53,21 @@ class FakeRedis
     }
 
     /** @param string[] $keys */
-    public function mget(array $keys): array
+    public function mget(array $keys): array|false
     {
+        if ($this->mgetReturnsFalse) {
+            return false;
+        }
         return array_map(fn (string $k) => $this->data[$k] ?? false, $keys);
     }
 
     /** @param array<string, string> $values */
     public function mset(array $values): bool
     {
+        // phpredis: MSET with no pairs is an error, so an empty batch is false.
+        if ($values === []) {
+            return false;
+        }
         $this->data = array_merge($this->data, $values);
         return true;
     }
@@ -70,7 +79,7 @@ class FakeRedis
 
     public function exec(): array
     {
-        return [];
+        return $this->pipelineFails ? [false] : [true];
     }
 
     public function flushDB(): bool
@@ -268,5 +277,88 @@ class RedisCacheUnitTest extends TestCase
     {
         // 0 removed keys (absent) is still a successful no-op, not a failure.
         $this->assertTrue($this->cache->delete('missing'));
+    }
+
+    // --- P2-1 / P2-3 / P3-1 / P3-2 regressions ---
+
+    public function testRejectsReservedCharactersInKeys(): void
+    {
+        $rejected = 0;
+        foreach (['a{b', 'a}b', 'a(b', 'a)b', 'a/b', 'a\\b', 'a@b', 'a:b'] as $key) {
+            try {
+                $this->cache->set($key, 'value');
+            } catch (\Psr\SimpleCache\InvalidArgumentException) {
+                $rejected++;
+            }
+        }
+
+        $this->assertSame(8, $rejected, 'Every reserved character must be rejected');
+    }
+
+    public function testAcceptsKeysWithoutReservedCharacters(): void
+    {
+        $this->cache->set('app.user-1_x!', 'value');
+        $this->assertSame('value', $this->cache->get('app.user-1_x!'));
+    }
+
+    public function testRejectsNonStringKeysInBatchCalls(): void
+    {
+        $rejected = 0;
+        try {
+            $this->cache->setMultiple([0 => 'value']);
+        } catch (\Psr\SimpleCache\InvalidArgumentException) {
+            $rejected++;
+        }
+
+        $this->assertSame(1, $rejected, 'A non-string key must be rejected');
+    }
+
+    public function testGetMultipleReturnsCleanErrorWhenMgetFails(): void
+    {
+        $this->fake->mgetReturnsFalse = true;
+
+        try {
+            $this->cache->getMultiple(['a', 'b']);
+            self::fail('Expected CacheException');
+        } catch (\MiGears\Cache\Exception\CacheException $e) {
+            $this->assertStringContainsString('mget', $e->getMessage());
+        }
+    }
+
+    public function testSetMultipleReturnsFalseWhenAPipelineCommandFails(): void
+    {
+        $this->fake->pipelineFails = true;
+
+        $this->assertFalse($this->cache->setMultiple(['a' => 1], 60));
+    }
+
+    public function testSetMultipleEmptyBatchIsTrue(): void
+    {
+        // FakeRedis::mset([]) mimics phpredis and returns false, so this only
+        // passes if the empty batch is short-circuited before reaching mset().
+        $this->assertTrue($this->cache->setMultiple([]));
+    }
+
+    public function testSetMultipleWithNonPositiveTtlDeletesEntries(): void
+    {
+        $this->cache->setMultiple(['a' => 1, 'b' => 2]);
+
+        $this->assertTrue($this->cache->setMultiple(['a' => 9, 'b' => 9], 0));
+        $this->assertFalse($this->cache->has('a'));
+        $this->assertFalse($this->cache->has('b'));
+    }
+
+    public function testWithPrefixWorksOnASubclassWithAnIncompatibleConstructor(): void
+    {
+        $cache = new class extends RedisCache {
+            public function __construct()
+            {
+            }
+        };
+
+        $prefixed = $cache->withPrefix('p:');
+
+        $this->assertInstanceOf(RedisCache::class, $prefixed);
+        $this->assertNotSame($cache, $prefixed);
     }
 }

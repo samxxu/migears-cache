@@ -421,11 +421,55 @@ class ArrayCacheTest extends TestCase
         $this->assertSame('value', $this->cache->get(''));
     }
 
-    public function testSpecialCharsKey(): void
+    public function testAcceptsKeysWithoutReservedCharacters(): void
     {
-        $key = 'key:with:special:chars!@#$%';
+        $key = 'key-with_special.chars!';
         $this->cache->set($key, 'value');
         $this->assertSame('value', $this->cache->get($key));
+    }
+
+    public function testRejectsReservedCharactersInKeys(): void
+    {
+        $rejected = 0;
+        foreach (['a{b', 'a}b', 'a(b', 'a)b', 'a/b', 'a\\b', 'a@b', 'a:b'] as $key) {
+            try {
+                $this->cache->set($key, 'value');
+            } catch (\Psr\SimpleCache\InvalidArgumentException) {
+                $rejected++;
+            }
+        }
+
+        self::assertSame(8, $rejected, 'Every reserved character must be rejected');
+    }
+
+    public function testRejectsNonStringKeysInBatchCalls(): void
+    {
+        $rejected = 0;
+        try {
+            $this->cache->setMultiple([0 => 'value']);
+        } catch (\Psr\SimpleCache\InvalidArgumentException) {
+            $rejected++;
+        }
+        try {
+            $this->cache->getMultiple([0]);
+        } catch (\Psr\SimpleCache\InvalidArgumentException) {
+            $rejected++;
+        }
+
+        self::assertSame(2, $rejected, 'Non-string keys must be rejected');
+    }
+
+    public function testWithPrefixWorksOnASubclassWithAnIncompatibleConstructor(): void
+    {
+        $cache = new class extends ArrayCache {
+            public function __construct()
+            {
+            }
+        };
+
+        $prefixed = $cache->withPrefix('p:');
+
+        $this->assertInstanceOf(ArrayCache::class, $prefixed);
     }
 
     public function testLongStringValue(): void

@@ -6,14 +6,13 @@ namespace MiGears\Cache;
 
 use Psr\Log\LoggerInterface;
 use MiGears\Cache\Exception\CacheException;
+use MiGears\Cache\Exception\InvalidCacheKeyException;
 
 /**
  * In-memory array cache implementation.
  *
  * Useful for unit testing, development environments, and caching within
  * a single request lifecycle.
- *
- * @phpstan-consistent-constructor
  */
 class ArrayCache implements CacheInterface
 {
@@ -29,6 +28,7 @@ class ArrayCache implements CacheInterface
 
     public function get(string $key, mixed $default = null): mixed
     {
+        $this->assertValidKey($key);
         try {
             $pkey = $this->prefix . $key;
             if (!$this->hasInternal($pkey)) {
@@ -43,6 +43,7 @@ class ArrayCache implements CacheInterface
 
     public function set(string $key, mixed $value, null|int|\DateInterval $ttl = null): bool
     {
+        $this->assertValidKey($key);
         try {
             $this->data[$this->prefix . $key] = [
                 'value' => $value,
@@ -57,6 +58,7 @@ class ArrayCache implements CacheInterface
 
     public function delete(string $key): bool
     {
+        $this->assertValidKey($key);
         // No try/catch here: $this->data is a typed array, so unset() cannot throw,
         // which makes the sibling methods' catch branch unreachable for this body.
         unset($this->data[$this->prefix . $key]);
@@ -65,6 +67,7 @@ class ArrayCache implements CacheInterface
 
     public function has(string $key): bool
     {
+        $this->assertValidKey($key);
         try {
             return $this->hasInternal($this->prefix . $key);
         } catch (\Throwable $e) {
@@ -99,9 +102,13 @@ class ArrayCache implements CacheInterface
      */
     public function getMultiple(iterable $keys, mixed $default = null): array
     {
+        $keyList = is_array($keys) ? array_values($keys) : iterator_to_array($keys, false);
+        foreach ($keyList as $key) {
+            $this->assertValidKey($key);
+        }
         try {
             $result = [];
-            foreach ($keys as $key) {
+            foreach ($keyList as $key) {
                 $result[$key] = $this->get($key, $default);
             }
             return $result;
@@ -116,9 +123,12 @@ class ArrayCache implements CacheInterface
     {
         try {
             foreach ($values as $key => $value) {
+                $this->assertValidKey($key);
                 $this->set($key, $value, $ttl);
             }
             return true;
+        } catch (InvalidCacheKeyException $e) {
+            throw $e;
         } catch (\Throwable $e) {
             $this->logError('ArrayCache setMultiple error', ['exception' => $e]);
             throw new CacheException($e->getMessage(), $e->getCode(), $e);
@@ -129,9 +139,12 @@ class ArrayCache implements CacheInterface
     {
         try {
             foreach ($keys as $key) {
+                $this->assertValidKey($key);
                 $this->delete($key);
             }
             return true;
+        } catch (InvalidCacheKeyException $e) {
+            throw $e;
         } catch (\Throwable $e) {
             $this->logError('ArrayCache deleteMultiple error', ['exception' => $e]);
             throw new CacheException($e->getMessage(), $e->getCode(), $e);
@@ -150,7 +163,10 @@ class ArrayCache implements CacheInterface
 
     public function withPrefix(string $prefix): static
     {
-        $copy = new static($this->logger);
+        // clone, not `new static(...)`: a subclass with an incompatible
+        // constructor must not make prefixing fail, and cloning keeps the
+        // already-initialized state without re-reading constructor arguments.
+        $copy = clone $this;
         $copy->data = &$this->data;
         $copy->prefix = $prefix;
         return $copy;
@@ -158,6 +174,7 @@ class ArrayCache implements CacheInterface
 
     public function incr(string $key, int $step = 1): int
     {
+        $this->assertValidKey($key);
         try {
             $pkey = $this->prefix . $key;
             if ($this->hasInternal($pkey)) {
@@ -176,6 +193,7 @@ class ArrayCache implements CacheInterface
 
     public function decr(string $key, int $step = 1): int
     {
+        $this->assertValidKey($key);
         try {
             $pkey = $this->prefix . $key;
             if ($this->hasInternal($pkey)) {
@@ -193,6 +211,20 @@ class ArrayCache implements CacheInterface
     }
 
     // --- Internal ---
+
+    /**
+     * PSR-16 reserves these characters and requires an InvalidArgumentException.
+     *
+     * @param mixed $key
+     */
+    private function assertValidKey(mixed $key): void
+    {
+        if (!is_string($key) || strpbrk($key, '{}()/\\@:') !== false) {
+            throw new InvalidCacheKeyException(
+                'Invalid cache key: expected a string without the reserved characters {}()/\\@:'
+            );
+        }
+    }
 
     private function hasInternal(string $pkey): bool
     {

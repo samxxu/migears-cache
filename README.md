@@ -134,7 +134,7 @@ $appCache->clear();                // only clears keys starting with "myapp:"
 
 ### Cache Key Contract
 
-PSR-16 reserves certain characters (`{}()/\@:`) and requires implementations to reject keys containing them with `InvalidArgumentException`. miGears does **not** validate cache keys — this is a deliberate choice to keep the framework minimal: phpredis treats most of those characters as ordinary strings, and `ArrayCache` (PHP array keys) accepts them all. Callers are responsible for using sane key strings; avoid `{}()/\@:` unless you know the backend tolerates them.
+PSR-16 reserves certain characters (`{}()/\@:`) and requires implementations to reject keys containing them with `InvalidArgumentException`. Both implementations validate every key and throw `Psr\SimpleCache\InvalidArgumentException` for a reserved character or a non-string key, so the array and Redis backends agree on what a key is. Keys may otherwise be any string; empty keys are accepted.
 
 ### Redis Data Structures & Distributed Locks
 
@@ -316,7 +316,7 @@ $appCache->clear();                // 只清除以 "myapp:" 开头的键
 
 ### 缓存键约定
 
-PSR-16 保留了一些字符（`{}()/\@:`）并要求实现对其抛 `InvalidArgumentException`。miGears **不校验缓存键**——这是为了保持框架极简而做出的有意取舍：phpredis 将大多数这类字符当作普通字符串处理，`ArrayCache`（PHP 数组键）则全部接受。使用者应自行保证键名规范；除非确认后端能容忍，否则请避免使用 `{}()/\@:`。
+PSR-16 保留了一些字符（`{}()/\@:`）并要求实现对其抛 `InvalidArgumentException`。两个实现都会校验每一个键，遇到保留字符或非字符串键时抛出 `Psr\SimpleCache\InvalidArgumentException`，从而使数组后端与 Redis 后端对「什么是合法的键」保持一致。除此之外键可以是任意字符串；空键允许使用。
 
 ### Redis 数据结构与分布式锁
 
