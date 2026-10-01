@@ -18,10 +18,10 @@ class ArrayCache implements CacheInterface
 {
     /** @var array<string, array{value: mixed, expire: int|null}> */
     private array $data = [];
-    private readonly ?LoggerInterface $logger;
+    private readonly LoggerInterface $logger;
     private string $prefix = '';
 
-    public function __construct(?LoggerInterface $logger = null)
+    public function __construct(LoggerInterface $logger)
     {
         $this->logger = $logger;
     }
@@ -178,7 +178,7 @@ class ArrayCache implements CacheInterface
         try {
             $pkey = $this->prefix . $key;
             if ($this->hasInternal($pkey)) {
-                $current = (int) $this->data[$pkey]['value'] + $step;
+                $current = $this->counterValue($pkey, $key) + $step;
                 $this->data[$pkey]['value'] = $current;
             } else {
                 $current = $step;
@@ -197,7 +197,7 @@ class ArrayCache implements CacheInterface
         try {
             $pkey = $this->prefix . $key;
             if ($this->hasInternal($pkey)) {
-                $current = (int) $this->data[$pkey]['value'] - $step;
+                $current = $this->counterValue($pkey, $key) - $step;
                 $this->data[$pkey]['value'] = $current;
             } else {
                 $current = -$step;
@@ -224,6 +224,34 @@ class ArrayCache implements CacheInterface
                 'Invalid cache key: expected a string without the reserved characters {}()/\\@:'
             );
         }
+    }
+
+    /**
+     * The stored counter as an int, or a failure when the value is not an integer.
+     *
+     * `RedisCache::adjustCounter()` answers a non-integer with `the value at "…" is not an integer`, and the
+     * two implementations are meant to be interchangeable, so this side says the same thing rather than
+     * casting. The cast was not harmless: `(int) 'abc'` is 0, so a counter that had been overwritten with a
+     * non-numeric value silently restarted from the step. An integer string counts as an integer, as it does
+     * in Redis; a float does not, because a counter holds whole numbers.
+     *
+     * 把存着的计数读成 int；不是整数就报错。`RedisCache::adjustCounter()` 对非整数答的是
+     * 「the value at "…" is not an integer」，而两个实现本就应该可以互换，因此这一侧答同样的话，而不是
+     * 强转。那个强转并非无害：`(int) 'abc'` 是 0，于是被非数值覆盖过的计数器会悄悄从步长重新开始。
+     * 整数字符串视同整数，与 Redis 一致；浮点不算，因为计数器装的是整数。
+     */
+    private function counterValue(string $pkey, string $key): int
+    {
+        $value = $this->data[$pkey]['value'];
+
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_string($value) && preg_match('/^-?\d+$/D', $value) === 1) {
+            return (int) $value;
+        }
+
+        throw new \RuntimeException(sprintf('the value at "%s" is not an integer', $key));
     }
 
     private function hasInternal(string $pkey): bool
@@ -253,6 +281,6 @@ class ArrayCache implements CacheInterface
     /** @param array<string, mixed> $context */
     private function logError(string $message, array $context = []): void
     {
-        $this->logger?->error($message, $context);
+        $this->logger->error($message, $context);
     }
 }

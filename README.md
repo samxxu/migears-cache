@@ -19,7 +19,21 @@ A lightweight PHP cache abstraction layer that provides a clean, unified API wit
 - **`getOrSet()`** — compute and cache on miss in one call
 - **`withPrefix()`** — key namespacing for shared cache backends
 - Supports `int`, `DateInterval`, or `null` TTL formats
-- Optional PSR-3 logger injection
+- PSR-3 logger required at construction, so a cache that reports nothing cannot be built by accident
+
+## Boundaries
+
+**In scope**
+
+- The PSR-16 `CacheInterface` (`get` / `set` / `delete` / `has` / `clear`, the batch `getMultiple` / `setMultiple` / `deleteMultiple`) plus the miGears additions `getOrSet()`, `withPrefix()`, `incr()` and `decr()`; the two implementations `ArrayCache` and `RedisCache` (PSR-4 root `MiGears\Cache`).
+- The key and TTL contract: a non-string key or one containing PSR-16's reserved characters `{}()/\@:` is rejected with `InvalidCacheKeyException`; TTL accepts `int`, `DateInterval` or `null`; counters are adjusted inside one atomic Redis script.
+- PSR-3 logger injection is required (the constructor takes a `LoggerInterface`); `RedisCache` wraps an already-connected instance, and `$allowedClasses` bounds what a marked payload may unserialize into.
+
+**Not in scope (by design)**
+
+- Queue operations and distributed locks — provided by `migears/data-structure` (`RedisDataStructure::listPush()` / `listPop()`, `RedisLock`).
+- Redis Hash / List / Set / ZSet data-structure semantics — also owned by `migears/data-structure`.
+- Establishing, owning or closing the Redis connection (and choosing server/database) — that belongs to the caller; `RedisCache` never connects on its own.
 
 ## Installation
 
@@ -42,8 +56,9 @@ Values live in a plain PHP array and are **lost when the request ends**; use `Re
 
 ```php
 use MiGears\Cache\ArrayCache;
+use Psr\Log\NullLogger;
 
-$cache = new ArrayCache();
+$cache = new ArrayCache(new NullLogger());
 
 $cache->set('key', 'value');
 $value = $cache->get('key');       // 'value'
@@ -58,11 +73,12 @@ Passing an already connected Redis instance. `RedisCache` never connects on its 
 
 ```php
 use MiGears\Cache\RedisCache;
+use Psr\Log\NullLogger;
 
 $redis = new Redis();
 $redis->connect('127.0.0.1', 6379);
 
-$cache = new RedisCache($redis);
+$cache = new RedisCache($redis, new NullLogger());
 ```
 
 When using miGears in a web environment, inject the connection in `MiRest` and obtain it via the service registry:
@@ -74,7 +90,7 @@ $rest->set(Redis::class, function () {
     return $redis;
 });
 // in a resource:
-$cache = new RedisCache($this->resolve(Redis::class));
+$cache = new RedisCache($this->resolve(Redis::class), new NullLogger());
 ```
 
 Values are stored so that a string is never read back as something else. A string is written verbatim, unless it begins with an internal marker — then it is stored as a payload too, because the reader has no other way to tell the two apart. Only marked values are ever unserialized, so a string shaped like `O:8:"stdClass":0:{}` stays a string.
@@ -82,7 +98,7 @@ Values are stored so that a string is never read back as something else. A strin
 `$allowedClasses` bounds what a marked payload may instantiate on read. The default (`true`) keeps PSR-16 object support; pass `false`, or the classes you actually cache, if entries can be written by anyone outside your application:
 
 ```php
-$cache = new RedisCache($redis, allowedClasses: false);
+$cache = new RedisCache($redis, new NullLogger(), allowedClasses: false);
 ```
 
 With `false`, a payload carrying an object comes back as `__PHP_Incomplete_Class` instead of the object; arrays and scalars are unaffected.
@@ -107,6 +123,8 @@ With `false`, a payload carrying an object comes back as `__PHP_Incomplete_Class
 | `withPrefix(string $prefix): static` | Return namespaced instance |
 
 A counter keeps the shape it was found in: one written by `set()` stays an int, so `get()` reads it back as an int, while a bare integer another client left behind stays a string. Both are adjusted inside one Redis script, so the read and the write cannot interleave, and the TTL survives.
+
+A counter whose stored value is not an integer is refused rather than coerced: `incr()` and `decr()` throw `CacheException` (`the value at "…" is not an integer`). Both implementations answer the same way, so a counter does not change behaviour with the backend behind it, and a value overwritten by something non-numeric is never silently counted as `0`. An integer string is an integer, as it is in Redis.
 
 ### getOrSet — Lazy cache pattern
 
@@ -201,7 +219,21 @@ MIT
 - **`getOrSet()`** — 一次调用完成"读缓存-计算-写缓存"
 - **`withPrefix()`** — 共享缓存后端的键命名空间隔离
 - 支持 `int`、`DateInterval`、`null` 三种 TTL 格式
-- 可选 PSR-3 日志注入
+- PSR-3 日志器在构造时必填，因此不会意外构造出一个什么也不上报的 cache
+
+## 边界
+
+**范围内**
+
+- PSR-16 `CacheInterface`（`get` / `set` / `delete` / `has` / `clear` 及批量 `getMultiple` / `setMultiple` / `deleteMultiple`），外加 miGears 扩展的 `getOrSet()`、`withPrefix()`、`incr()`、`decr()`；两个实现 `ArrayCache` 与 `RedisCache`（PSR-4 根为 `MiGears\Cache`）。
+- 键与 TTL 约定：非字符串键或含 PSR-16 保留字符 `{}()/\@:` 的键会抛 `InvalidCacheKeyException`；TTL 支持 `int`、`DateInterval`、`null`；计数器在同一段原子 Redis 脚本内调整。
+- PSR-3 日志为必填（构造器接收 `LoggerInterface`）；`RedisCache` 包装已连接的实例，并以 `$allowedClasses` 限定带标记载荷可以反序列化成哪些类。
+
+**范围外（刻意不做）**
+
+- 队列操作与分布式锁 —— 由 `migears/data-structure` 提供（`RedisDataStructure::listPush()` / `listPop()`、`RedisLock`）。
+- Redis Hash / List / Set / ZSet 数据结构语义 —— 同样归 `migears/data-structure`。
+- 建立、持有或关闭 Redis 连接（以及选择服务器与数据库）—— 由调用方负责；`RedisCache` 自身不会连接。
 
 ## 安装
 
@@ -224,8 +256,9 @@ composer require migears/cache
 
 ```php
 use MiGears\Cache\ArrayCache;
+use Psr\Log\NullLogger;
 
-$cache = new ArrayCache();
+$cache = new ArrayCache(new NullLogger());
 
 $cache->set('key', 'value');
 $value = $cache->get('key');       // 'value'
@@ -240,11 +273,12 @@ $cache->clear();
 
 ```php
 use MiGears\Cache\RedisCache;
+use Psr\Log\NullLogger;
 
 $redis = new Redis();
 $redis->connect('127.0.0.1', 6379);
 
-$cache = new RedisCache($redis);
+$cache = new RedisCache($redis, new NullLogger());
 ```
 
 在 miGears 的 web 环境中，通过 `MiRest` 注入连接，再经服务注册中心取得：
@@ -256,7 +290,7 @@ $rest->set(Redis::class, function () {
     return $redis;
 });
 // 在资源类中：
-$cache = new RedisCache($this->resolve(Redis::class));
+$cache = new RedisCache($this->resolve(Redis::class), new NullLogger());
 ```
 
 存储方式是「无歧义」的：字符串原样写入，除非它以内部标记开头——那时它也会被当作载荷存储，因为读取方没有别的办法区分两者。只有带标记的值会被反序列化，因此形如 `O:8:"stdClass":0:{}` 的字符串读出来仍然是字符串。
@@ -264,7 +298,7 @@ $cache = new RedisCache($this->resolve(Redis::class));
 `$allowedClasses` 限定读回时载荷可以实例化哪些类。默认值（`true`）保留 PSR-16 的对象支持；若缓存条目可能由应用之外的人写入，可传 `false`，或只列出你确实会缓存的类：
 
 ```php
-$cache = new RedisCache($redis, allowedClasses: false);
+$cache = new RedisCache($redis, new NullLogger(), allowedClasses: false);
 ```
 
 传 `false` 时，带对象的载荷会以 `__PHP_Incomplete_Class` 返回而非该对象；数组与标量不受影响。
@@ -289,6 +323,8 @@ $cache = new RedisCache($redis, allowedClasses: false);
 | `withPrefix(string $prefix): static` | 返回带前缀的实例 |
 
 计数器的存储形状保持不变：由 `set()` 写入的计数读回来是 int，而其他客户端留下的裸整数仍读作字符串。两者都在同一段 Redis 脚本中调整，因此读写不会被插入，TTL 也会保留。
+
+存着的值不是整数时，计数器会拒绝而不是强转：`incr()` 与 `decr()` 抛 `CacheException`（`the value at "…" is not an integer`）。两个实现给的是同一个答案，因此计数器的行为不会随背后的后端而变，被非数值覆盖过的值也绝不会被悄悄当成 `0` 来计数。整数字符串算整数，Redis 也是如此。
 
 ### getOrSet — 懒缓存模式
 

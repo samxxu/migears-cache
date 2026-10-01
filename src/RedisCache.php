@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace MiGears\Cache;
 
 use Psr\Log\LoggerInterface;
-use Psr\Log\NullLogger;
 use MiGears\Cache\Exception\CacheException;
 use MiGears\Cache\Exception\InvalidCacheKeyException;
 
@@ -24,7 +23,7 @@ use MiGears\Cache\Exception\InvalidCacheKeyException;
  *       return $redis;
  *   });
  *   // in a resource:
- *   $cache = new RedisCache($this->resolve(Redis::class));
+ *   $cache = new RedisCache($this->resolve(Redis::class), $logger);
  *
  * Storage is unambiguous by construction: a string is written verbatim unless
  * it begins with the marker, and only marked values are unserialized, so a
@@ -54,7 +53,9 @@ class RedisCache implements CacheInterface
 
     /**
      * @param object $redis Already connected Redis instance; the caller owns the connection
-     * @param LoggerInterface|null $logger
+     * @param LoggerInterface $logger Required: a cache that reports nothing while looking
+     *        healthy is the failure this parameter exists to prevent. Pass an explicit
+     *        NullLogger only when discarding these messages is a deliberate choice.
      * @param array<class-string>|bool $allowedClasses Classes unserialize() may instantiate.
      *        The default (true) keeps PSR-16 object support. Pass false, or the classes you
      *        actually cache, to stop a payload written by someone else from instantiating
@@ -62,10 +63,10 @@ class RedisCache implements CacheInterface
      */
     public function __construct(
         object $redis,
-        ?LoggerInterface $logger = null,
+        LoggerInterface $logger,
         array|bool $allowedClasses = true,
     ) {
-        $this->logger = $logger ?? new NullLogger();
+        $this->logger = $logger;
         $this->redis = $redis;
         $this->allowedClasses = $allowedClasses;
     }
@@ -147,8 +148,9 @@ class RedisCache implements CacheInterface
             if ($keys === [] || $keys === false) {
                 return true;
             }
-            $this->redis->del(...$keys);
-            return true;
+            // del() answers the number of removed keys; only a literal false is a
+            // failed command, so report it here instead of a silent success.
+            return $this->redis->del(...$keys) !== false;
         } catch (\Throwable $e) {
             $this->logger->error('RedisCache clear error', ['exception' => $e]);
             throw new CacheException($e->getMessage(), $e->getCode(), $e);
@@ -232,8 +234,10 @@ class RedisCache implements CacheInterface
             if ($prefixedKeys === []) {
                 return true;
             }
-            $this->redis->del(...$prefixedKeys);
-            return true;
+            // del() answers the number of removed keys (0 when absent, still a
+            // successful no-op); only a literal false is a failed command, so
+            // report it here instead of a silent success.
+            return $this->redis->del(...$prefixedKeys) !== false;
         } catch (InvalidCacheKeyException $e) {
             throw $e;
         } catch (\Throwable $e) {

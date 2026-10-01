@@ -6,6 +6,8 @@ namespace MiGears\Cache\Tests;
 
 use PHPUnit\Framework\TestCase;
 use MiGears\Cache\ArrayCache;
+use MiGears\Cache\Exception\CacheException;
+use Psr\Log\NullLogger;
 
 class ArrayCacheTest extends TestCase
 {
@@ -13,7 +15,7 @@ class ArrayCacheTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->cache = new ArrayCache();
+        $this->cache = new ArrayCache(new NullLogger());
     }
 
     // --- get / set ---
@@ -247,6 +249,42 @@ class ArrayCacheTest extends TestCase
         $this->assertSame(-5, $result);
     }
 
+    public function testIncrRefusesANonIntegerValue(): void
+    {
+        // RedisCache answers a non-integer with `the value at "…" is not an integer`. This side used to cast,
+        // so `(int) 'abc'` made the counter 0 and incr() reported 1 as though nothing had happened.
+        // RedisCache 对非整数答「the value at "…" is not an integer」。这一侧此前会强转，于是 `(int) 'abc'`
+        // 把计数变成 0，incr() 报出 1，仿佛什么都没发生。
+        $this->cache->set('counter', 'abc');
+
+        $this->expectException(CacheException::class);
+        $this->expectExceptionMessage('the value at "counter" is not an integer');
+
+        $this->cache->incr('counter');
+    }
+
+    public function testDecrRefusesANonIntegerValue(): void
+    {
+        // The same refusal, so the two directions cannot drift apart again.
+        // 同样的拒绝，好让两个方向不会再各走各的。
+        $this->cache->set('counter', 'abc');
+
+        $this->expectException(CacheException::class);
+        $this->expectExceptionMessage('the value at "counter" is not an integer');
+
+        $this->cache->decr('counter');
+    }
+
+    public function testIncrAcceptsAnIntegerString(): void
+    {
+        // The other side of that boundary: Redis increments "10" to 11, and these two implementations are
+        // meant to be interchangeable, so an integer string stays a counter.
+        // 那道分界的另一侧：Redis 会把 "10" 加到 11，而这两个实现本就应该可互换，因此整数字符串仍算计数。
+        $this->cache->set('counter', '10');
+
+        $this->assertSame(11, $this->cache->incr('counter'));
+    }
+
     // --- getOrSet ---
 
     public function testGetOrSetWithMiss(): void
@@ -411,6 +449,20 @@ class ArrayCacheTest extends TestCase
     public function testImplementsPsr16Interface(): void
     {
         $this->assertInstanceOf(\Psr\SimpleCache\CacheInterface::class, $this->cache);
+    }
+
+    // --- Constructor ---
+
+    public function testConstructorRequiresALogger(): void
+    {
+        // G3: silence used to be the default — a cache handed no logger reported nothing while
+        // looking healthy. The logger is required now, so a call site that forgets it fails at
+        // assembly time instead of running silently.
+        // G3：此前的默认是静默——没拿到 logger 的 cache 看起来正常却什么都不上报。现在 logger 为必填，
+        // 忘记传的调用点会在装配期失败，而不是静默运行。
+        $this->expectException(\ArgumentCountError::class);
+
+        new ArrayCache();
     }
 
     // --- Edge cases ---

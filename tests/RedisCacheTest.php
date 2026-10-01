@@ -6,6 +6,7 @@ namespace MiGears\Cache\Tests;
 
 use PHPUnit\Framework\TestCase;
 use MiGears\Cache\RedisCache;
+use Psr\Log\NullLogger;
 
 /**
  * @requires extension redis
@@ -25,7 +26,7 @@ class RedisCacheTest extends TestCase
             $redis = new \Redis();
             $redis->connect($host, $port);
             $redis->select($dbindex);
-            $this->cache = new RedisCache($redis);
+            $this->cache = new RedisCache($redis, new NullLogger());
             $this->cache->clear();
         } catch (\Throwable $e) {
             $this->markTestSkipped('Redis server not available: ' . $e->getMessage());
@@ -212,7 +213,7 @@ class RedisCacheTest extends TestCase
         $redis = new \Redis();
         $redis->connect($host, $port);
 
-        $cache = new RedisCache($redis);
+        $cache = new RedisCache($redis, new NullLogger());
         $cache->set('test_instance', 'value');
         $this->assertSame('value', $cache->get('test_instance'));
         $cache->delete('test_instance');

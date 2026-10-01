@@ -6,6 +6,7 @@ namespace MiGears\Cache\Tests;
 
 use PHPUnit\Framework\TestCase;
 use MiGears\Cache\RedisCache;
+use Psr\Log\NullLogger;
 
 /** Minimal in-memory stand-in for phpredis, used to test serialization logic without the extension. */
 class FakeRedis
@@ -58,7 +59,9 @@ class FakeRedis
         if ($this->mgetReturnsFalse) {
             return false;
         }
-        return array_map(fn (string $k) => $this->data[$k] ?? false, $keys);
+        // phpredis answers a positional list, not a key-preserving map, so a
+        // non-list input must not line up by key here either.
+        return array_values(array_map(fn (string $k) => $this->data[$k] ?? false, $keys));
     }
 
     /** @param array<string, string> $values */
@@ -87,6 +90,16 @@ class FakeRedis
         $this->data = [];
         return true;
     }
+
+    /** @return string[] */
+    public function keys(string $pattern): array
+    {
+        $prefix = rtrim($pattern, '*');
+        return array_values(array_filter(
+            array_keys($this->data),
+            fn (string $k) => str_starts_with($k, $prefix)
+        ));
+    }
 }
 
 /**
@@ -104,7 +117,7 @@ class RedisCacheUnitTest extends TestCase
     protected function setUp(): void
     {
         $this->fake = new FakeRedis();
-        $this->cache = new RedisCache($this->fake);
+        $this->cache = new RedisCache($this->fake, new NullLogger());
     }
 
     public function testStringShapedLikeSerializedObjectStaysString(): void
@@ -205,7 +218,7 @@ class RedisCacheUnitTest extends TestCase
         // A payload written straight into the store by someone else.
         $this->fake->data['poisoned'] = "\x00MG" . serialize(new \stdClass());
 
-        $cache = new RedisCache($this->fake, allowedClasses: false);
+        $cache = new RedisCache($this->fake, new NullLogger(), allowedClasses: false);
 
         // unserialize() returns an __PHP_Incomplete_Class rather than the object.
         $this->assertNotInstanceOf(\stdClass::class, $cache->get('poisoned'));
@@ -213,7 +226,7 @@ class RedisCacheUnitTest extends TestCase
 
     public function testAllowedClassesFalseStillRoundTripsArrays(): void
     {
-        $cache = new RedisCache($this->fake, allowedClasses: false);
+        $cache = new RedisCache($this->fake, new NullLogger(), allowedClasses: false);
         $cache->set('array', ['a' => 1, 'nested' => ['b' => 2]]);
 
         $this->assertSame(['a' => 1, 'nested' => ['b' => 2]], $cache->get('array'));
@@ -221,7 +234,7 @@ class RedisCacheUnitTest extends TestCase
 
     public function testWithPrefixKeepsAllowedClasses(): void
     {
-        $cache = new RedisCache($this->fake, allowedClasses: false);
+        $cache = new RedisCache($this->fake, new NullLogger(), allowedClasses: false);
         $prefixed = $cache->withPrefix('p:');
         $this->fake->data['p:poisoned'] = "\x00MG" . serialize(new \stdClass());
 
@@ -277,6 +290,22 @@ class RedisCacheUnitTest extends TestCase
     {
         // 0 removed keys (absent) is still a successful no-op, not a failure.
         $this->assertTrue($this->cache->delete('missing'));
+    }
+
+    public function testDeleteMultiplePropagatesRedisFailure(): void
+    {
+        $this->fake->delReturnsFalse = true;
+
+        $this->assertFalse($this->cache->deleteMultiple(['a', 'b']));
+    }
+
+    public function testClearWithPrefixPropagatesRedisFailure(): void
+    {
+        $this->fake->data['p:a'] = 'x';
+        $cache = $this->cache->withPrefix('p:');
+        $this->fake->delReturnsFalse = true;
+
+        $this->assertFalse($cache->clear());
     }
 
     // --- P2-1 / P2-3 / P3-1 / P3-2 regressions ---
@@ -360,5 +389,17 @@ class RedisCacheUnitTest extends TestCase
 
         $this->assertInstanceOf(RedisCache::class, $prefixed);
         $this->assertNotSame($cache, $prefixed);
+    }
+
+    // --- Constructor ---
+
+    public function testConstructorRequiresALogger(): void
+    {
+        // G3: the NullLogger fallback is gone, so a call site that forgets the logger fails at
+        // assembly time instead of running silently.
+        // G3：NullLogger 兜底已删除，忘记传 logger 的调用点会在装配期失败，而不是静默运行。
+        $this->expectException(\ArgumentCountError::class);
+
+        new RedisCache($this->fake);
     }
 }
